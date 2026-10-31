@@ -982,6 +982,83 @@ def register_generic_tools(mcp):
         return result
 
     @mcp.tool()
+    async def sch_place_comment(text: str, x: float, y: float,
+                                document: str = "") -> dict[str, Any]:
+        """Post an Altium 365 review comment at a point on a schematic.
+
+        A comment is kept only on a project saved to an Altium 365
+        Workspace. On a local project it is placed but stays unsaved, and
+        closing the project asks "Save To Workspace" (Yes moves the
+        project into the Workspace, No drops the comment). A free sheet
+        offers no comment at all. There is no API for comments, so this
+        drives the interface: Place > Comment, Jump To Location to the
+        point, then the popup's text box and Post. It brings Altium to the
+        front and leaves the view zoomed in on the point.
+
+        Args:
+            text: The comment.
+            x, y: The point on the sheet, in mils.
+            document: The schematic's full path. Empty uses the focused
+                document, which must be a schematic.
+
+        Returns:
+            ``ok``, ``posted``, ``document``, ``x``, ``y`` and ``kept``
+            (where the comment is stored); or ``ok: False`` with
+            ``reason`` and, when Altium refused, ``altium`` with its
+            message. The posted text is not read back: the Comments and
+            Tasks panel cannot be read.
+        """
+        # Here and not with the interface tools, which send no bridge
+        # command: this one focuses its document through the bridge first.
+        import asyncio
+        import os
+
+        from ..bridge.exceptions import AltiumError
+        from ..ui import comments, menu, uia
+        from .uiauto import _altium_pid
+
+        if not str(text or "").strip():
+            return {"ok": False, "reason": "text is empty; Altium posts no empty comment"}
+        pid, problem = _altium_pid()
+        if problem is not None:
+            return problem
+        if not uia.available() or not menu.available():
+            return {"ok": False, "reason": (
+                "placing a comment needs UI Automation, pywin32 and comtypes")}
+
+        bridge = get_bridge()
+        if document:
+            try:
+                await bridge.send_command_async(
+                    "application.set_active_document", {"file_path": document})
+            except AltiumError as exc:
+                # A project's sheet can be listed but not loaded yet; open
+                # it as app_set_active_document does.
+                if "not loaded" not in str(exc).lower() or not os.path.isfile(document):
+                    raise
+                await bridge.send_command_async("application.run_process", {
+                    "process_name": "WorkspaceManager:OpenObject",
+                    "parameters": f"ObjectKind=Document|FileName={document}"})
+                await bridge.send_command_async(
+                    "application.set_active_document", {"file_path": document})
+        active = await bridge.send_command_async(
+            "application.get_active_document", {}) or {}
+        path = str(active.get("file_path") or "")
+        kind = str(active.get("document_kind") or "").upper()
+        if kind not in ("SCH", "SCHDOC") and not path.lower().endswith(".schdoc"):
+            return {"ok": False, "document": path, "reason": (
+                f"the focused document is {kind or 'none'}, not a schematic. "
+                f"Pass document= with the sheet's path")}
+        if not menu.bring_to_front(pid):
+            return {"ok": False, "reason": "could not focus Altium"}
+
+        loop = asyncio.get_running_loop()
+        out = await loop.run_in_executor(
+            None, lambda: comments.place(pid, float(x), float(y), str(text)))
+        out["document"] = path
+        return out
+
+    @mcp.tool()
     async def sch_mirror_component(
         designator: str,
         mirrored: bool | None = None,
