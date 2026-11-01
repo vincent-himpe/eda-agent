@@ -23218,6 +23218,7 @@ Var
     Idx, Emitted, I : Integer;
     Items, Entry, Common, PolyPts, Body, OwnerName, OwnerNet, Sizes : String;
     More, Keepout, InPoly, Wanted, Wide : Boolean;
+    OneLayer : IPCB_LayerSet;
     Passes : TStringList;
     P : Integer;
     Rest, Kind : String;
@@ -23272,10 +23273,17 @@ Begin
                     eRegionObject, eFillObject, ePolyObject));
             { The legacy layer set stops at Mechanical16: the V7 set reaches  }
             { every mechanical layer (issue #149). A layer the legacy set     }
-            { cannot hold is matched by name while walking the whole V7 set.  }
+            { cannot hold gets a V7 set of its own, so the board hands out    }
+            { that layer only; the match by name below stays as a guard.      }
             Wide := (OnLayer <> eNoLayer) And (GetLayerString(OnLayer) = 'Unknown');
             If (OnLayer <> eNoLayer) And Not Wide Then
                 Iter.AddFilter_LayerSet(MkSet(OnLayer))
+            Else If Wide Then
+            Begin
+                OneLayer := LayerSet.CreateLayerSet;
+                OneLayer.Include(OnLayer);
+                Iter.AddFilter_IPCB_LayerSet(OneLayer);
+            End
             Else
                 Iter.AddFilter_IPCB_LayerSet(LayerSet.AllLayers);
             Iter.AddFilter_Method(eProcessAll);
